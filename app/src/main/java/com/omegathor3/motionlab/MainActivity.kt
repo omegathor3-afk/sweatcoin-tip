@@ -1,12 +1,17 @@
 package com.omegathor3.motionlab
 
+import android.Manifest
 import android.content.Context
+import android.content.pm.PackageManager
+import android.os.Build
 import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -50,13 +55,25 @@ private fun MotionLabScreen(context: Context) {
     var steps by remember { mutableIntStateOf(0) }
     var running by remember { mutableStateOf(false) }
     var acceleration by remember { mutableStateOf("في انتظار قراءة المستشعر…") }
+    var hardwareSteps by remember { mutableStateOf<Long?>(null) }
+    var detectorEvents by remember { mutableIntStateOf(0) }
+    var counterBaseline by remember { mutableStateOf<Float?>(null) }
+    var hasActivityPermission by remember {
+        mutableStateOf(Build.VERSION.SDK_INT < Build.VERSION_CODES.Q ||
+            context.checkSelfPermission(Manifest.permission.ACTIVITY_RECOGNITION) == PackageManager.PERMISSION_GRANTED)
+    }
+    val permissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted -> hasActivityPermission = granted }
 
     val sensorManager = remember { context.getSystemService(Context.SENSOR_SERVICE) as SensorManager }
     val accelerometer = remember { sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER) }
+    val stepCounterSensor = remember { sensorManager.getDefaultSensor(Sensor.TYPE_STEP_COUNTER) }
+    val stepDetectorSensor = remember { sensorManager.getDefaultSensor(Sensor.TYPE_STEP_DETECTOR) }
     val sensors = remember {
         listOf(
             "مقياس التسارع" to Sensor.TYPE_ACCELEROMETER,
-            "عداد الخطوات" to Sensor.TYPE_STEP_COUNTER,
+            "عداد الخطوات الحقيقي" to Sensor.TYPE_STEP_COUNTER,
             "كاشف الخطوات" to Sensor.TYPE_STEP_DETECTOR,
             "الجيروسكوب" to Sensor.TYPE_GYROSCOPE
         ).map { (label, type) -> label to (sensorManager.getDefaultSensor(type) != null) }
@@ -76,6 +93,38 @@ private fun MotionLabScreen(context: Context) {
                 override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) = Unit
             }
             sensorManager.registerListener(listener, accelerometer, SensorManager.SENSOR_DELAY_UI)
+            onDispose { sensorManager.unregisterListener(listener) }
+        }
+    }
+
+    DisposableEffect(stepCounterSensor, stepDetectorSensor, hasActivityPermission) {
+        if (!hasActivityPermission) {
+            onDispose { }
+        } else {
+            val listener = object : SensorEventListener {
+                override fun onSensorChanged(event: SensorEvent) {
+                    when (event.sensor.type) {
+                        Sensor.TYPE_STEP_COUNTER -> {
+                            val totalSinceBoot = event.values[0]
+                            val baseline = counterBaseline
+                            if (baseline == null) {
+                                counterBaseline = totalSinceBoot
+                                hardwareSteps = 0L
+                            } else {
+                                hardwareSteps = (totalSinceBoot - baseline).toLong().coerceAtLeast(0L)
+                            }
+                        }
+                        Sensor.TYPE_STEP_DETECTOR -> detectorEvents += 1
+                    }
+                }
+                override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) = Unit
+            }
+            stepCounterSensor?.let {
+                sensorManager.registerListener(listener, it, SensorManager.SENSOR_DELAY_NORMAL)
+            }
+            stepDetectorSensor?.let {
+                sensorManager.registerListener(listener, it, SensorManager.SENSOR_DELAY_NORMAL)
+            }
             onDispose { sensorManager.unregisterListener(listener) }
         }
     }
@@ -135,10 +184,11 @@ private fun MotionLabScreen(context: Context) {
                         ).padding(22.dp)
                     ) {
                         Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
-                            Text("عداد الخطوات الافتراضي", color = Muted, fontSize = 13.sp)
+                            Text("الخطوات الحقيقية من مستشعر الهاتف", color = Muted, fontSize = 13.sp)
                             Spacer(Modifier.height(8.dp))
-                            Text("%,d".format(steps), fontSize = 54.sp, fontWeight = FontWeight.Black, color = Color.White)
-                            Text("خطوة", color = Cyan, fontWeight = FontWeight.Bold)
+                            Text(hardwareSteps?.let { "%,d".format(it) } ?: "—", fontSize = 54.sp, fontWeight = FontWeight.Black, color = Color.White)
+                            Text(if (!hasActivityPermission) "يلزم إذن النشاط البدني" else "خطوة مكتشفة من مستشعر الهاتف", color = Cyan, fontWeight = FontWeight.Bold)
+                            Text("عداد المحاكاة المحلي: %,d".format(steps), color = Muted, fontSize = 11.sp)
                             Spacer(Modifier.height(18.dp))
                             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
                                 Metric("السرعة", "$speed", "كم/س")
@@ -187,6 +237,25 @@ private fun MotionLabScreen(context: Context) {
                             "المحاكاة تجريبية ومحلية؛ لا تغيّر عداد Android ولا ترسل خطوات لتطبيقات أخرى.",
                             color = Muted, fontSize = 11.sp, lineHeight = 16.sp
                         )
+                    }
+                }
+
+                Card(shape = RoundedCornerShape(22.dp), colors = CardDefaults.cardColors(containerColor = Panel)) {
+                    Column(Modifier.fillMaxWidth().padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Text("فحص عداد الخطوات الحقيقي", fontSize = 17.sp, fontWeight = FontWeight.Bold)
+                        Text("عداد النظام: " + if (stepCounterSensor != null) "متاح" else "غير موجود" +
+                            "  •  كاشف الخطوات: " + if (stepDetectorSensor != null) "متاح" else "غير موجود",
+                            color = Muted, fontSize = 12.sp)
+                        Text("أحداث كاشف الخطوات في هذه الجلسة: $detectorEvents", color = Cyan, fontWeight = FontWeight.SemiBold)
+                        if (!hasActivityPermission && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                            Button(onClick = { permissionLauncher.launch(Manifest.permission.ACTIVITY_RECOGNITION) }) {
+                                Text("منح إذن النشاط البدني")
+                            }
+                        } else {
+                            Text(if (hardwareSteps == null) "في انتظار أول قراءة من مستشعر الخطوات…" else
+                                "المستشعر يعمل. امشِ بشكل طبيعي والهاتف في جيبك لاختبار العد.",
+                                color = Green, fontSize = 12.sp)
+                        }
                     }
                 }
 
