@@ -279,6 +279,15 @@ private fun MotionLabScreen(context: Context) {
                         val powerManager = context.getSystemService(Context.POWER_SERVICE) as PowerManager
                         val batteryUnrestricted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) powerManager.isIgnoringBatteryOptimizations(context.packageName) else true
                         Text("إصدار Sweatcoin: $sweatcoinVersion", color = Muted, fontSize = 12.sp)
+                        OutlinedButton(
+                            onClick = {
+                                val launchIntent = context.packageManager.getLaunchIntentForPackage("in.sweatco.app")
+                                if (launchIntent != null) context.startActivity(launchIntent)
+                                else Toast.makeText(context, "تعذر فتح Sweatcoin؛ تحقق من تثبيته.", Toast.LENGTH_LONG).show()
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(14.dp)
+                        ) { Text("فتح تطبيق Sweatcoin") }
                         Text("قيود بطارية MotionLab: ${if (batteryUnrestricted) "مستثنى من التحسين" else "خاضع لتحسين البطارية"}", color = Muted, fontSize = 12.sp)
                         Text("أندرويد لا يتيح قراءة بيانات Sweatcoin الخاصة مباشرة. الصق هنا النص أو الأرقام التي يعرضها التطبيق بنفسك، وسنضمّها للتقرير.", color = Muted, fontSize = 12.sp, lineHeight = 18.sp)
                         OutlinedTextField(
