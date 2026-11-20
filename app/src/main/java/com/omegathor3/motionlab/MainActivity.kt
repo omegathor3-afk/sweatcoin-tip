@@ -2,6 +2,8 @@ package com.omegathor3.motionlab
 
 import android.content.Context
 import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -28,10 +30,12 @@ private fun MotionLabScreen(context: Context) {
     var speed by remember { mutableIntStateOf(5) }
     var steps by remember { mutableIntStateOf(0) }
     var running by remember { mutableStateOf(false) }
+    var acceleration by remember { mutableStateOf("في انتظار قراءة المستشعر…") }
 
     val sensorManager = remember {
         context.getSystemService(Context.SENSOR_SERVICE) as SensorManager
     }
+    val accelerometer = remember { sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER) }
     val sensors = remember {
         listOf(
             "مقياس التسارع" to Sensor.TYPE_ACCELEROMETER,
@@ -39,6 +43,25 @@ private fun MotionLabScreen(context: Context) {
             "كاشف الخطوات" to Sensor.TYPE_STEP_DETECTOR,
             "الجيروسكوب" to Sensor.TYPE_GYROSCOPE
         ).map { (label, type) -> label to (sensorManager.getDefaultSensor(type) != null) }
+    }
+
+    DisposableEffect(accelerometer) {
+        if (accelerometer == null) {
+            acceleration = "مستشعر التسارع غير متاح على هذا الهاتف"
+            onDispose { }
+        } else {
+            val listener = object : SensorEventListener {
+                override fun onSensorChanged(event: SensorEvent) {
+                    val x = event.values[0]
+                    val y = event.values[1]
+                    val z = event.values[2]
+                    acceleration = "X: %.2f   Y: %.2f   Z: %.2f m/s²".format(x, y, z)
+                }
+                override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) = Unit
+            }
+            sensorManager.registerListener(listener, accelerometer, SensorManager.SENSOR_DELAY_UI)
+            onDispose { sensorManager.unregisterListener(listener) }
+        }
     }
 
     LaunchedEffect(running, speed) {
@@ -57,11 +80,11 @@ private fun MotionLabScreen(context: Context) {
             ) {
                 Text("MOTION LAB", style = MaterialTheme.typography.headlineLarge)
                 Text("مختبر محاكاة الحركة وتشخيص مستشعرات الهاتف")
-                Text("محاكاة محلية — لا ترسل خطوات مزيفة إلى التطبيقات الأخرى.")
-                Spacer(Modifier.height(8.dp))
+                Text("المحاكاة تعمل داخل هذا التطبيق فقط، ولا تغيّر بيانات التطبيقات الأخرى.")
+                HorizontalDivider()
                 Text("الخطوات الافتراضية", style = MaterialTheme.typography.titleMedium)
                 Text(steps.toString(), style = MaterialTheme.typography.displayLarge)
-                Text("السرعة المختارة: ${speed} كم/ساعة")
+                Text("السرعة المختارة: $speed كم/ساعة")
                 Slider(
                     value = speed.toFloat(),
                     onValueChange = { speed = it.roundToInt().coerceIn(1, 20) },
@@ -76,14 +99,18 @@ private fun MotionLabScreen(context: Context) {
                         Text("إعادة ضبط")
                     }
                 }
-                Spacer(Modifier.height(8.dp))
-                Text("مستشعرات الهاتف", style = MaterialTheme.typography.titleLarge)
+                HorizontalDivider()
+                Text("اختبار المستشعر الحقيقي", style = MaterialTheme.typography.titleLarge)
+                Text("قراءات مقياس التسارع المباشرة", style = MaterialTheme.typography.titleMedium)
+                Text(acceleration, style = MaterialTheme.typography.bodyLarge)
+                Text("حرّك الهاتف برفق ولاحظ تغيّر قيم X وY وZ.")
+                HorizontalDivider()
+                Text("حالة مستشعرات الهاتف", style = MaterialTheme.typography.titleLarge)
                 sensors.forEach { (name, available) ->
                     Text("$name: ${if (available) "متاح" else "غير متاح"}")
                 }
                 Text(
-                    "ملاحظة: عداد المحاكاة مستقل عن عداد خطوات Android الحقيقي. " +
-                        "اختبار استقبال بيانات مستشعرات افتراضية على مستوى النظام يحتاج بيئة اختبار مخصصة.",
+                    "عداد المحاكاة مستقل عن عداد خطوات Android الحقيقي. لا يتم إرسال خطوات افتراضية إلى تطبيقات أخرى.",
                     style = MaterialTheme.typography.bodySmall
                 )
             }
