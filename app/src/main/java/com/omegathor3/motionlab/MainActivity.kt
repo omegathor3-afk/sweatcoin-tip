@@ -2,8 +2,12 @@ package com.omegathor3.motionlab
 
 import android.Manifest
 import android.content.Context
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.pm.PackageManager
 import android.os.Build
+import android.os.PowerManager
+import android.widget.Toast
 import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
@@ -58,6 +62,9 @@ private fun MotionLabScreen(context: Context) {
     var hardwareSteps by remember { mutableStateOf<Long?>(null) }
     var detectorEvents by remember { mutableIntStateOf(0) }
     var counterBaseline by remember { mutableStateOf<Float?>(null) }
+    var rawSensorTotal by remember { mutableStateOf<Float?>(null) }
+    var lastSensorEventMs by remember { mutableStateOf<Long?>(null) }
+    var sweatcoinNotes by remember { mutableStateOf("") }
     var hasActivityPermission by remember {
         mutableStateOf(Build.VERSION.SDK_INT < Build.VERSION_CODES.Q ||
             context.checkSelfPermission(Manifest.permission.ACTIVITY_RECOGNITION) == PackageManager.PERMISSION_GRANTED)
@@ -106,6 +113,8 @@ private fun MotionLabScreen(context: Context) {
                     when (event.sensor.type) {
                         Sensor.TYPE_STEP_COUNTER -> {
                             val totalSinceBoot = event.values[0]
+                            rawSensorTotal = totalSinceBoot
+                            lastSensorEventMs = System.currentTimeMillis()
                             val baseline = counterBaseline
                             if (baseline == null) {
                                 counterBaseline = totalSinceBoot
@@ -114,7 +123,7 @@ private fun MotionLabScreen(context: Context) {
                                 hardwareSteps = (totalSinceBoot - baseline).toLong().coerceAtLeast(0L)
                             }
                         }
-                        Sensor.TYPE_STEP_DETECTOR -> detectorEvents += 1
+                        Sensor.TYPE_STEP_DETECTOR -> { detectorEvents += 1; lastSensorEventMs = System.currentTimeMillis() }
                     }
                 }
                 override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) = Unit
@@ -247,6 +256,7 @@ private fun MotionLabScreen(context: Context) {
                             "  •  كاشف الخطوات: " + if (stepDetectorSensor != null) "متاح" else "غير موجود",
                             color = Muted, fontSize = 12.sp)
                         Text("أحداث كاشف الخطوات في هذه الجلسة: $detectorEvents", color = Cyan, fontWeight = FontWeight.SemiBold)
+                        Text("العداد التراكمي منذ تشغيل الهاتف: ${rawSensorTotal?.roundToInt()?.toString() ?: "—"}", color = Muted, fontSize = 12.sp)
                         if (!hasActivityPermission && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                             Button(onClick = { permissionLauncher.launch(Manifest.permission.ACTIVITY_RECOGNITION) }) {
                                 Text("منح إذن النشاط البدني")
@@ -256,6 +266,56 @@ private fun MotionLabScreen(context: Context) {
                                 "المستشعر يعمل. امشِ بشكل طبيعي والهاتف في جيبك لاختبار العد.",
                                 color = Green, fontSize = 12.sp)
                         }
+                    }
+                }
+
+                Card(shape = RoundedCornerShape(22.dp), colors = CardDefaults.cardColors(containerColor = Panel)) {
+                    Column(Modifier.fillMaxWidth().padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Text("تقرير توافق Sweatcoin", fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                        val sweatcoinVersion = remember {
+                            try { context.packageManager.getPackageInfo("in.sweatco.app", 0).versionName ?: "مثبت" }
+                            catch (_: Exception) { "غير مثبت أو غير ظاهر للنظام" }
+                        }
+                        val powerManager = context.getSystemService(Context.POWER_SERVICE) as PowerManager
+                        val batteryUnrestricted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) powerManager.isIgnoringBatteryOptimizations(context.packageName) else true
+                        Text("إصدار Sweatcoin: $sweatcoinVersion", color = Muted, fontSize = 12.sp)
+                        Text("قيود بطارية MotionLab: ${if (batteryUnrestricted) "مستثنى من التحسين" else "خاضع لتحسين البطارية"}", color = Muted, fontSize = 12.sp)
+                        Text("أندرويد لا يتيح قراءة بيانات Sweatcoin الخاصة مباشرة. الصق هنا النص أو الأرقام التي يعرضها التطبيق بنفسك، وسنضمّها للتقرير.", color = Muted, fontSize = 12.sp, lineHeight = 18.sp)
+                        OutlinedTextField(
+                            value = sweatcoinNotes,
+                            onValueChange = { sweatcoinNotes = it },
+                            modifier = Modifier.fillMaxWidth(),
+                            label = { Text("بيانات Sweatcoin المنسوخة (اختياري)") },
+                            placeholder = { Text("خطوات اليوم، الخطوات المحوّلة، رسالة الخطأ…") },
+                            minLines = 3,
+                            maxLines = 6,
+                            shape = RoundedCornerShape(14.dp)
+                        )
+                        Button(
+                            onClick = {
+                                val report = buildString {
+                                    appendLine("MOTIONLAB / SWEATCOIN DIAGNOSTIC")
+                                    appendLine("الجهاز: ${Build.MANUFACTURER} ${Build.MODEL}")
+                                    appendLine("Android: ${Build.VERSION.RELEASE} (SDK ${Build.VERSION.SDK_INT})")
+                                    appendLine("Sweatcoin: $sweatcoinVersion")
+                                    appendLine("إذن النشاط البدني: $hasActivityPermission")
+                                    appendLine("Step Counter: ${stepCounterSensor != null}")
+                                    appendLine("Step Detector: ${stepDetectorSensor != null}")
+                                    appendLine("خطوات المستشعر في جلسة MotionLab: ${hardwareSteps ?: "لا توجد قراءة"}")
+                                    appendLine("العداد التراكمي منذ تشغيل الهاتف: ${rawSensorTotal?.roundToInt() ?: "لا توجد قراءة"}")
+                                    appendLine("أحداث Step Detector: $detectorEvents")
+                                    appendLine("قيود بطارية MotionLab: ${if (batteryUnrestricted) "مستثنى" else "غير مستثنى"}")
+                                    appendLine("المحاكاة المحلية (ليست خطوات نظام): $steps")
+                                    appendLine("--- بيانات منسوخة من Sweatcoin ---")
+                                    appendLine(sweatcoinNotes.ifBlank { "لم تتم إضافة بيانات" })
+                                }
+                                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                clipboard.setPrimaryClip(ClipData.newPlainText("MotionLab diagnostic", report))
+                                Toast.makeText(context, "تم نسخ التقرير. ابعته هنا.", Toast.LENGTH_LONG).show()
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = ButtonDefaults.buttonColors(containerColor = Cyan, contentColor = Night)
+                        ) { Text("نسخ تقرير التشخيص لإرساله هنا", fontWeight = FontWeight.Bold) }
                     }
                 }
 
